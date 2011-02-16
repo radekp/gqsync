@@ -1,4 +1,4 @@
-#include <QDebug>
+#include <qtopialog.h>
 #include <QApplication>
 
 #include "googlesession.h"
@@ -18,34 +18,35 @@ GoogleSync::~GoogleSync()
 {
 }
 
-bool GoogleSync::start(const QString &login, const QString &passwd, bool setskip)
+bool GoogleSync::start(const QString &login, const QString &passwd, bool setskip, bool setRemoveAll)
 {
   if (inProgress)
     return false;
   inProgress = true;
   skip = setskip;
+  removeAll = setRemoveAll;
   session->login(login, passwd);
 }
 
 void GoogleSync::googleError(GoogleSession::Error err, const QString &reason)
 {
-  qCritical() << "Google error";
-  QApplication::instance()->exit(1);
+    inProgress = false;
+    qCritical() << "Google error" << reason;
 }
 
 void GoogleSync::googleAuth()
 {
-  qDebug() << "Google authenticated";
+  qLog(Synchronization) << "Google authenticated";
   session->fetchGroups();
 }
 
 void GoogleSync::googleGroups(QHash<QString, QString> groups)
 {
-  qDebug() << "Groups!";
+  qLog(Synchronization) << "Groups!";
   groupMap = groups;
   for (QHash<QString, QString>::iterator it=groupMap.begin(); it!=groupMap.end(); it++)
   {
-    qDebug() << it.key() << "->" << it.value();
+    qLog(Synchronization) << it.key() << "->" << it.value();
   }
   session->setGroups(groups);
   session->updateGroups();
@@ -55,8 +56,8 @@ void GoogleSync::googleGroups(QHash<QString, QString> groups)
 
 void GoogleSync::googleContacts(QList<QContact> contacts)
 {
-  qDebug() << "Got contacts. Updating" << skip;
-  session->updateContacts(contacts,skip);
-  qDebug() << "Terminating";
+  qLog(Synchronization) << "Got contacts. Updating" << skip << removeAll;
+  session->updateContacts(contacts, skip, removeAll);
+  qLog(Synchronization) << "Terminating";
   QApplication::instance()->exit(0);
 }

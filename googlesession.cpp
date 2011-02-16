@@ -3,21 +3,20 @@
 #include <QStringList>
 
 #include <QHttp>
+#include <QUrl>
 #include <QHttpResponseHeader>
 #include <QHttpRequestHeader>
-#include <QUrl>
 
 #include <QContactModel>
 #include <QCategoryManager>
 
-#include <QDebug>
+#include <qtopialog.h>
 
 #include "googlesession.h"
 #include "gzip.h"
 
-#define USER_AGENT_GZ "GQSync/1.1 (gzip)"
-#define USER_AGENT "GQSync/1.1"
-#define GQSYNC_SOURCE "community-GQSync-1"
+#define USER_AGENT_GZ "GQSync/1.0 (gzip)"
+#define USER_AGENT "GQSync/1.0"
 static QString stateNames[] = {
   "Invalid",
   "Authenticating",
@@ -40,7 +39,7 @@ GoogleSession::~GoogleSession()
 
 void GoogleSession::setState(State newState)
 {
-  qDebug() << "GoogleSession: state" << stateNames[m_state] << "->" << stateNames[newState];
+  qLog(Synchronization) << "GoogleSession: state" << stateNames[m_state] << "->" << stateNames[newState];
   m_state = newState;
   emit stateChanged(m_state);
 }
@@ -67,27 +66,19 @@ void GoogleSession::login(const QString &login, const QString &passwd)
     connect(http, SIGNAL(requestFinished(int, bool)), SLOT(httpResult(int, bool)));
   }
   
-	QHttpRequestHeader header("POST", "https://www.google.com/accounts/ClientLogin");
-  http->setHost("google.com");
-  
-	//header.setValue("Host", "google.com");
+  QHttpRequestHeader header("POST", "/accounts/ClientLogin",1,0);
+  http->setHost("www.google.com",QHttp::ConnectionModeHttps);
+  http->ignoreSslErrors();
+  connect(http, SIGNAL(sslErrors(const QList<QSslError> &)),
+          this, SLOT(sslErrors(const QList<QSslError> &)));
+
+  header.setValue("Host", "www.google.com");
   header.setValue( "User-Agent", USER_AGENT);
   header.setContentType("application/x-www-form-urlencoded");
   
-	QUrl query;
-	query.addQueryItem("accountType", "HOSTED_OR_GOOGLE");
-	query.addQueryItem("service", "cp");
-	query.addQueryItem("source", GQSYNC_SOURCE);
-	query.addQueryItem("Email", login);
-	query.addQueryItem("Passwd", passwd);
-
-	qDebug() << "Auth request";
-	qDebug() << "--Header";
-	qDebug() << header.toString();
-	qDebug() << "--Body";
-	qDebug() << query.encodedQuery();
+  QString queryString = QString("Email=%1&Passwd=%2&accountType=GOOGLE&service=cp").arg(login).arg(passwd);
   
-	authReqId = http->request(header, query.encodedQuery());
+  authReqId = http->request(header,queryString.toUtf8());
   setState(Authenticating);    
 }
 
@@ -100,21 +91,26 @@ void GoogleSession::httpResult(int id, bool errorFlag)
   else if (id==contactsFetchId) // Groups fetch result
     contactsResult(errorFlag); 
   else
-    qDebug() << "GoogleSession: Invalid response id" << id << "error:" << errorFlag;
+    qLog(Synchronization) << "GoogleSession: Invalid response id" << id << "error:" << errorFlag;
+}
+
+void GoogleSession::sslErrors(const QList<QSslError> &errors)
+{
+    http->ignoreSslErrors();
 }
 
 void GoogleSession::authResult(bool errorFlag)
 {
     if (errorFlag)
     {
-      qDebug() << "Auth http error" << http->errorString();
+      qLog(Synchronization) << "Auth http error" << http->errorString();
       setState(Invalid);
       emit error(AuthenticationFailed, http->errorString());
     }
     else
     {
       QString resp = http->readAll(); 
-      //qDebug() << resp;
+      // qDebug() << resp;
       QStringList keys = resp.split("\n");
       QHash<QString, QString> keyMap;
       for (QStringList::iterator it = keys.begin(); it!=keys.end(); it++)
@@ -123,14 +119,14 @@ void GoogleSession::authResult(bool errorFlag)
         QString key = it->left(sep);
         QString value = it->right(it->length()-sep-1);
         keyMap[key] = value;
-        //qDebug() << key << value;
+        // qDebug() << key << value;
       }
       if (http->lastResponse().statusCode()==200) // OK
       {
         if (keyMap.contains("Auth"))
         {
           authKey = keyMap["Auth"];
-          qDebug() << "Authenticated" << authKey;
+          qLog(Synchronization) << "Authenticated" << authKey;
           setState(Authenticated);
           emit authenticated();
         }
@@ -142,8 +138,8 @@ void GoogleSession::authResult(bool errorFlag)
       }
       else
       {
-        qDebug() << "ERROR Response header:" << http->lastResponse().statusCode() << http->lastResponse().reasonPhrase();
-        qDebug() << "ERROR reason" << keyMap["Error"];
+        qLog(Synchronization) << "ERROR Response header:" << http->lastResponse().statusCode() << http->lastResponse().reasonPhrase();
+        qLog(Synchronization) << "ERROR reason" << keyMap["Error"];
         setState(Invalid);
         emit error(AuthenticationFailed, keyMap["Error"]);
       }
@@ -153,8 +149,8 @@ void GoogleSession::groupsResult(bool errorFlag)
 {
     QByteArray respData = http->readAll();
 
-    qDebug() << "Groups Response header:" << http->lastResponse().statusCode() << http->lastResponse().reasonPhrase();
-    qDebug() << "Groups HTTP headers\n" << http->lastResponse().toString();
+    qLog(Synchronization) << "Groups Response header:" << http->lastResponse().statusCode() << http->lastResponse().reasonPhrase();
+    qLog(Synchronization) << "Groups HTTP headers\n" << http->lastResponse().toString();
     QString resp;
     if (http->lastResponse().value("content-encoding")=="gzip")
     {
@@ -175,8 +171,8 @@ void GoogleSession::groupsResult(bool errorFlag)
 void GoogleSession::contactsResult(bool errorFlag)
 {
     QByteArray respData = http->readAll();
-    qDebug() << "Contacts Response header:" << http->lastResponse().statusCode() << http->lastResponse().reasonPhrase();
-    qDebug() << "Contacts HTTP headers\n" << http->lastResponse().toString(); 
+    qLog(Synchronization) << "Contacts Response header:" << http->lastResponse().statusCode() << http->lastResponse().reasonPhrase();
+    qLog(Synchronization) << "Contacts HTTP headers\n" << http->lastResponse().toString(); 
 
     QString resp;
     if (http->lastResponse().value("content-encoding")=="gzip")
@@ -211,7 +207,7 @@ void GoogleSession::fetchGroups()
   http->setHost("www.google.com");
   groupsFetchId = http->request(header);
   setState(FetchingGroups);
-  qDebug() << "Fetching groups...";
+  qLog(Synchronization) << "Fetching groups...";
 }
 
 void GoogleSession::setGroups(QHash<QString, QString> groups)
@@ -236,44 +232,39 @@ void GoogleSession::fetchContacts()
   http->setHost("www.google.com");
   contactsFetchId = http->request(header);
   setState(FetchingContacts);
-  qDebug() << "Fetching conacts...";
+  qLog(Synchronization) << "Fetching contacts...";
 }
 
-int GoogleSession::updateContacts(QList<QContact> &contacts, bool skip) {
+int GoogleSession::updateContacts(QList<QContact> &contacts, bool skip, bool removeAll) {
 
   setState(UpdatingContacts);
   QContactModel filter;
 
-	qDebug() << "PIM source" << filter.defaultSource().identity;
+  if (removeAll) {
+    qLog(Synchronization) << "Removing all contacts...";
+    for (int i = filter.count() - 1; i >= 0; i--) {
+      filter.removeContact(filter.contact(i));
+    }
+    qLog(Synchronization) << "Contacts removed";
+  }
 
   for (int i = 0; i < contacts.size(); ++i) {
-		QContact gContact = contacts.at(i);
-
-		qDebug() << "process contact" << gContact.label();
+    QContact gContact = contacts.at(i);
 
     // skip contacts with no phonenumbers
     if (skip && (! gContact.phoneNumbers().size() ))
       continue;
 
-    /*
-		filter.addContact(gContact, filter.phoneSource());
-		continue;
-    */
-
     filter.setFilter(gContact.label());
 
-    // single match. merging
+    // single match. mering
     if (filter.count() == 1) {
-			qDebug() << "Merging";
       filter.updateContact( merge(filter.contact(0), gContact) );
     } 
     // no match. saving directly
     else if (filter.count() == 0) {
-			qDebug() << "Adding";
       filter.addContact(gContact);
     }
-		else
-			qDebug() << "WTF?! Multiple matches";
   }
 
   setState(Authenticated);
@@ -282,8 +273,8 @@ int GoogleSession::updateContacts(QList<QContact> &contacts, bool skip) {
 QContact GoogleSession::merge(QContact contact, GoogleContact gContact)
 {
 
-  qDebug() << "==";
-  qDebug() << contact.label() << gContact.label();
+  qLog(Synchronization) << "==";
+  qLog(Synchronization) << contact.label() << gContact.label();
 
   // merge email lists
   QStringList gl = gContact.emailList(); 
@@ -291,7 +282,7 @@ QContact GoogleSession::merge(QContact contact, GoogleContact gContact)
 
   for (int i=0; i<gl.size(); ++i) {
     if ( el.contains( gl.at(i) ) )
-      qDebug() << "already have email" <<  gl.at(i) ;
+      qLog(Synchronization) << "already have email" <<  gl.at(i) ;
     else
       contact.insertEmail(  gl.at(i)  );
   }
@@ -311,15 +302,15 @@ QContact GoogleSession::merge(QContact contact, GoogleContact gContact)
 
     if (! nums.values().contains( phone  ) ) {
       gContact.setPhoneNumber(type,  phone);
-      qDebug () << "adding phone" << phone << "of type" << type;
+      qLog(Synchronization) << "adding phone" << phone << "of type" << type;
     } else {
 
        // iterate qtopia data
        QMapIterator<QContact::PhoneType, QString> it(nums);
        while (it.hasNext()) {
               it.next();
-              qDebug() << "contacts has phone" << it.value() << "of type" << it.key();
-              qDebug() << "comparing to google" << phone << "of type" << type;
+              qLog(Synchronization) << "contacts has phone" << it.value() << "of type" << it.key();
+              qLog(Synchronization) << "comparing to google" << phone << "of type" << type;
               if (it.value() ==  phone && it.key() != type ) {
 
                 bool updatedef = (contact.defaultPhoneNumber() == phone);
@@ -332,11 +323,11 @@ QContact GoogleSession::merge(QContact contact, GoogleContact gContact)
                 if (updatedef)
                   contact.setDefaultPhoneNumber(type);
 
-                qDebug() << "replaced phone of type" <<  type << phone << updatedef;
+                qLog(Synchronization) << "replaced phone of type" <<  type << phone << updatedef;
                 break;
               }
        }
-      qDebug () << "skipping phone" << phone << type ;
+      qLog(Synchronization) << "skipping phone" << phone << type ;
 
     }
   }
@@ -351,7 +342,7 @@ QContact GoogleSession::merge(QContact contact, GoogleContact gContact)
     QString googleGroupQId   = "category." + googleGroupName;
 
 
-    qDebug() << "Group id" <<googleGroupId << "name" << googleGroupName ;
+    qLog(Synchronization) << "Group id" <<googleGroupId << "name" << googleGroupName ;
 
     if (googleGroupName.isEmpty())
       continue;
@@ -362,19 +353,19 @@ QContact GoogleSession::merge(QContact contact, GoogleContact gContact)
     if (! qGroupList.contains(googleGroupQId) )  {
       qGroupList << googleGroupQId;
 
-      qDebug() << "Adding group" << googleGroupName ;
+      qLog(Synchronization) << "Adding group" << googleGroupName ;
 
       contact.setCategories(qGroupList);
 
     } else {
-      qDebug() << "Skipping group" << googleGroupName;
+      qLog(Synchronization) << "Skipping group" << googleGroupName;
     }
 
-    qDebug() << "group count" << qGroupList.count();
+    qLog(Synchronization) << "group count" << qGroupList.count();
 
   }
 
-  qDebug() << "\n";
+  qLog(Synchronization) << "\n";
   return contact;
 
 }

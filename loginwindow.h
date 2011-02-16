@@ -27,9 +27,7 @@ private:
         QLineEdit* login;
         QLineEdit* passw;
 
-        QPushButton* startButton;
-        QPushButton* exitButton;
-
+        QCheckBox* removeAllFirst;
         QCheckBox* save;
         QCheckBox* skip;
 
@@ -41,3 +39,4 @@ private slots:
 };
 
 #endif
+
