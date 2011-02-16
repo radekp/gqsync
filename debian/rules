@@ -7,7 +7,7 @@ clean:
 	rm -f debian/files
 
 binary: build
-	../../../../../build/build/bin/qbuild packages
+	../../../../../build/bin/qbuild packages
 	mkdir -p debian/tmp/opt/qtmoko
 	cd debian/tmp/opt/qtmoko && tar xzvpf ../../../../../../../../../build/qtmoko-apps/gqsync/pkg/*
 	cd debian/tmp/opt/qtmoko && tar xzvpf data.tar.gz
